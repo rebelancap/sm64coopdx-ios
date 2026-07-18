@@ -1,0 +1,11 @@
+{
+  "name": "sm64coopdx \u2014 iPhone & iPad",
+  "identifier": "com.rebelancap.sm64coopdx.ios",
+  "subtitle": "Super Mario 64 Co-op Deluxe",
+  "description": "Placeholder iOS source. This port is Apple Vision Pro only \u2014 use the visionOS source.",
+  "website": "https://github.com/rebelancap/sm64coopdx-ios",
+  "tintColor": "#E60012",
+  "iconURL": "https://raw.githubusercontent.com/rebelancap/sm64coopdx-ios/main/sidestore/assets/source-icon.png",
+  "apps": [],
+  "news": []
+}
