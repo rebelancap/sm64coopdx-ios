@@ -1,0 +1,57 @@
+Overlay patch 0003: teach the desktop Makefile to build the Metal
+backend (Objective-C++) on macOS.
+
+This is the DESKTOP oracle's half of the Metal work (D-003): it is what
+makes `SM64_RAPI=metal ./build/us_pc/sm64coopdx` runnable on macOS, which
+is where the backend was proven pixel-identical to GL (M-13). The
+iOS/visionOS targets build through CMake and pick gfx_metal.mm up
+separately (overlay 0005) — hence the OSX_BUILD gate here.
+
+ENABLE_METAL_BACKEND rides in BACKEND_CFLAGS next to the existing OpenGL
+selection, so no non-macOS build sees any of it.
+
+--- a/Makefile
++++ b/Makefile
+@@ -493,6 +493,12 @@
+ LEVEL_C_FILES     := $(wildcard levels/*/leveldata.c) $(wildcard levels/*/script.c) $(wildcard levels/*/geo.c)
+ C_FILES           := $(foreach dir,$(SRC_DIRS),$(wildcard $(dir)/*.c)) $(LEVEL_C_FILES)
+ CPP_FILES         := $(foreach dir,$(SRC_DIRS),$(wildcard $(dir)/*.cpp))
++# Objective-C++ sources: the Metal rendering backend. macOS-only for now; the
++# iOS/visionOS targets build through CMake and pick this up separately.
++OBJCPP_FILES      :=
++ifeq ($(OSX_BUILD),1)
++  OBJCPP_FILES    += src/pc/gfx/gfx_metal.mm
++endif
+ S_FILES           := $(foreach dir,$(SRC_DIRS),$(wildcard $(dir)/*.s))
+ ULTRA_C_FILES     := $(foreach dir,$(ULTRA_SRC_DIRS),$(wildcard $(dir)/*.c))
+ GODDARD_C_FILES   := $(foreach dir,$(GODDARD_SRC_DIRS),$(wildcard $(dir)/*.c))
+@@ -538,6 +544,7 @@
+ # Object files
+ O_FILES := $(foreach file,$(C_FILES),$(BUILD_DIR)/$(file:.c=.o)) \
+            $(foreach file,$(CPP_FILES),$(BUILD_DIR)/$(file:.cpp=.o)) \
++           $(foreach file,$(OBJCPP_FILES),$(BUILD_DIR)/$(file:.mm=.o)) \
+            $(foreach file,$(S_FILES),$(BUILD_DIR)/$(file:.s=.o)) \
+            $(foreach file,$(GENERATED_C_FILES),$(file:.c=.o))
+ 
+@@ -731,6 +738,9 @@
+   BACKEND_LDFLAGS += -lGLESv2
+ else ifeq ($(OSX_BUILD),1)
+   BACKEND_LDFLAGS += -framework OpenGL `pkg-config --libs glew` -mmacosx-version-min=$(MIN_MACOS_VERSION)
++  # Metal backend (gfx_metal.mm). QuartzCore supplies CAMetalLayer.
++  BACKEND_LDFLAGS += -framework Metal -framework QuartzCore -framework Foundation
++  BACKEND_CFLAGS  += -DENABLE_METAL_BACKEND=1
+   EXTRA_CPP_FLAGS += -stdlib=libc++ -std=c++17 -mmacosx-version-min=$(MIN_MACOS_VERSION)
+ else
+   BACKEND_LDFLAGS += -lGL
+@@ -1394,6 +1404,11 @@
+ 	$(V)$(CXX) $(PROF_FLAGS) -fsyntax-only $(EXTRA_CPP_FLAGS) $(EXTRA_CPP_INCLUDES) $(CFLAGS) -MMD -MP -MT $@ -MF $(BUILD_DIR)/$*.d $<
+ 	$(V)$(CXX) $(PROF_FLAGS) -c $(EXTRA_CPP_FLAGS) $(EXTRA_CPP_INCLUDES) $(CFLAGS) -o $@ $<
+ 
++# Compile Objective-C++ code (Metal backend)
++$(BUILD_DIR)/%.o: %.mm
++	$(call print,Compiling:,$<,$@)
++	$(V)$(CXX) $(PROF_FLAGS) -c -x objective-c++ -fobjc-arc $(EXTRA_CPP_FLAGS) $(EXTRA_CPP_INCLUDES) $(CFLAGS) -MMD -MP -MT $@ -MF $(BUILD_DIR)/$*.d -o $@ $<
++
+ # Compile C code
+ $(BUILD_DIR)/%.o: %.c
+ 	$(call print,Compiling:,$<,$@)

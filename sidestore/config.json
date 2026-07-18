@@ -1,0 +1,38 @@
+{
+  "_comment": "In-repo SideStore source. The Action (../.github/workflows/build-sources.yml) runs generate.py on a schedule, reads THIS repo's latest release, and commits the refreshed apps-visionos.json next to this file. This port is Apple Vision Pro only, so only the visionOS source carries an app; apps-ios.json is generated empty.",
+  "sources": {
+    "ios": {
+      "name": "sm64coopdx — iPhone & iPad",
+      "identifier": "com.rebelancap.sm64coopdx.ios",
+      "subtitle": "Super Mario 64 Co-op Deluxe",
+      "description": "Placeholder iOS source. This port is Apple Vision Pro only — use the visionOS source.",
+      "website": "https://github.com/rebelancap/sm64coopdx-ios",
+      "tintColor": "#E60012",
+      "iconURL": "https://raw.githubusercontent.com/rebelancap/sm64coopdx-ios/main/sidestore/assets/source-icon.png"
+    },
+    "visionos": {
+      "name": "sm64coopdx — Apple Vision Pro",
+      "identifier": "com.rebelancap.sm64coopdx.visionos",
+      "subtitle": "Super Mario 64 Co-op Deluxe in 2D and stereoscopic 3D",
+      "description": "Super Mario 64 Co-op Deluxe on Apple Vision Pro — online co-op and a world-locked stereoscopic 3D mode. Bring your own ROM.",
+      "website": "https://github.com/rebelancap/sm64coopdx-ios",
+      "tintColor": "#E60012",
+      "iconURL": "https://raw.githubusercontent.com/rebelancap/sm64coopdx-ios/main/sidestore/assets/source-icon.png"
+    }
+  },
+  "apps": [
+    {
+      "name": "Super Mario 64 Co-op Deluxe",
+      "bundleIdentifier": "com.sm64coopdx.ios",
+      "repo": "rebelancap/sm64coopdx-ios",
+      "developerName": "rebelancap",
+      "subtitle": "Super Mario 64 Co-op Deluxe for Apple Vision Pro",
+      "localizedDescription": "Super Mario 64 Co-op Deluxe on Apple Vision Pro: the full game rendered natively on Metal, online co-op over CoopNet, and a world-locked stereoscopic 3D mode with live-tunable screen size, distance, depth, and focus. Ships with no game content; you supply your own Super Mario 64 (US) ROM.",
+      "iconURL": "https://raw.githubusercontent.com/rebelancap/sm64coopdx-ios/main/sidestore/assets/sm64coopdx.png",
+      "tintColor": "#E60012",
+      "iosMinOS": "16.0",
+      "visionosMinOS": "2.0",
+      "screenshotURLs": []
+    }
+  ]
+}
