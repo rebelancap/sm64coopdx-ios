@@ -1,0 +1,347 @@
+Overlay patch 0005: the visionOS (xros/xrsimulator) CMake target.
+
+Selected by -DCMAKE_SYSTEM_NAME=visionOS; everything is gated on
+SM64_VISIONOS so the iOS target is bit-for-bit unaffected.
+
+What it changes and why (each has a receipt in MEASUREMENTS):
+1. OBJCXX added to project() — gfx_metal.mm is Objective-C++.
+2. Renderer: iOS keeps USE_GLES/RAPI_GL; visionOS gets
+   ENABLE_METAL_BACKEND + SM64_NO_OPENGL and drops both GL defines.
+   GL is not merely unused there — every GL entry point is
+   API-unavailable in the xrOS SDK, so gfx_opengl.c is excluded from the
+   source list and the GL call sites are compiled out (overlay 0002).
+3. TARGET_IOS stays defined for visionOS (M-9): it is the fork's OWN
+   define, not TargetConditionals' TARGET_OS_IOS (which is 0 on xros), and
+   it carries platform.c's correct Documents/bundle-root semantics for
+   free. The ROM-drop path needs no change.
+4. Deps come from SM64_XROS_DEPS_PREFIX, not lib/*/ios/*.a — the vendored
+   prebuilts are Mach-O platform 2 (iOS) and cannot link into an xrOS
+   binary (M-5/M-11/D-005). FATAL_ERROR rather than a link-time mystery
+   if the prefix is missing.
+5. -framework OpenGLES dropped for visionOS.
+6. Device family 7 + XROS_DEPLOYMENT_TARGET (CMake emits
+   IPHONEOS_DEPLOYMENT_TARGET, which Xcode ignores for xros).
+7. SDL2 gets the visionOS compat patch alongside the fork's existing iOS
+   gamepad fix, through the fork's own git-apply mechanism. The two
+   compose in either order — proven on this tree, both directions (M-9).
+8. Info.plist: a visionOS-specific plist via SM64_VISIONOS_PLIST.
+9. Signing team via SM64_DEVELOPMENT_TEAM (default "" = iOS unchanged).
+   The vendored CMakeLists hardcodes XCODE_ATTRIBUTE_DEVELOPMENT_TEAM ""
+   as a TARGET property. Xcode target-level build settings BEAT
+   project-level ones, and CMAKE_XCODE_ATTRIBUTE_* writes the project
+   level — so passing -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM on the
+   command line is silently overridden by the empty target value and the
+   device build dies with "Signing for 'sm64coopdx' requires a
+   development team." Measured, not reasoned: the generated pbxproj
+   carries DEVELOPMENT_TEAM = 57G8J46Z2T at project level AND
+   DEVELOPMENT_TEAM = "" at target level, and the build fails (M-27).
+   The sim build never hit this because it sets CODE_SIGNING_ALLOWED=NO.
+10. INSTALL_PATH/SKIP_INSTALL on the target, or `xcodebuild archive`
+   produces an archive with an EMPTY Products/ (CMake defaults every
+   target to INSTALL_PATH = ""). -exportArchive then rejects a perfectly
+   valid export method with `expected one {} but found debugging` —
+   an empty set of distribution methods, because Xcode cannot classify
+   an archive containing no app. Same target-vs-project precedence trap
+   as item 9 (M-28).
+
+DELIBERATELY NOT DONE — the CMAKE_SYSTEM_NAME flip. Shipwright's overlay
+0022 flips CMAKE_SYSTEM_NAME back to "iOS" after every project() because
+ITS tree dispatches on STREQUAL "iOS" at 16+ sites. This tree does not:
+it dispatches on its own TARGET_IOS option. Flipping here would be
+actively harmful — SDL 2.32.10 self-detects visionOS in
+cmake/sdlplatform.cmake (`set(${SDL_CMAKE_PLATFORM} TRUE)` => VISIONOS),
+and all 13 of its platform conditionals in CMakeLists.txt are OR-groups
+containing VISIONOS. Leaving CMAKE_SYSTEM_NAME alone is what makes that
+detection fire. Proven, not argued: the configured build reports
+"Platform: visionOS" and compiles src/misc/ios/SDL_sysurl.m (NOT
+src/misc/macosx, which is the failure the charter's trap describes).
+
+BUT `set(IOS 1)` IS STILL REQUIRED — for a different reason than the
+charter's, and I only found it by hitting it. SDL2's CMakeLists.txt
+consistently ORs VISIONOS into its platform groups, but
+cmake/sdlchecks.cmake:1259 does NOT:
+
+    if(IOS OR TVOS)
+      list(APPEND SOURCE_FILES ${SDL2_SOURCE_DIR}/src/hidapi/ios/hid.m)
+      set(SDL_FRAMEWORK_COREBLUETOOTH 1)
+    endif()
+
+That is the ONLY bare IOS use in sdlchecks.cmake. With SDL_HIDAPI on
+(its default), src/hidapi/*.c compiles and references PLATFORM_hid_*, but
+no platform implementation is selected on visionOS => 17 undefined
+symbols at app link (_PLATFORM_hid_init, _PLATFORM_hid_read, ...). A real
+SDL 2.32.10 gap, not our misconfiguration.
+
+So the trap is real but its mechanism is the opposite of the charter's
+telling: Shipwright's flip set IOS=1 as a side effect and thereby MASKED
+this hidapi gap, which is why its notes attribute set(IOS 1) to the
+misc/macosx source selection. Setting IOS 1 alongside an unflipped
+CMAKE_SYSTEM_NAME gets both right: sdlchecks:1259 fires (hidapi/ios/hid.m
++ CoreBluetooth, exactly as the proven iOS build does), and the
+CMakeLists OR-groups are unaffected because they already matched on
+VISIONOS. Verified src/hidapi/ios/hid.m compiles clean for
+arm64-apple-xros2.0-simulator before adopting it.
+
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -1,6 +1,30 @@
+ cmake_minimum_required(VERSION 3.21)
+-project(sm64coopdx C CXX OBJC)
++# OBJCXX: the Metal rendering backend (src/pc/gfx/gfx_metal.mm) is Objective-C++.
++project(sm64coopdx C CXX OBJC OBJCXX)
+ 
++# visionOS is selected with -DCMAKE_SYSTEM_NAME=visionOS (+ an xros/xrsimulator
++# sysroot). NOTE: we deliberately do NOT flip CMAKE_SYSTEM_NAME back to "iOS"
++# here. This tree dispatches on its own TARGET_IOS option rather than on
++# CMAKE_SYSTEM_NAME, so there is nothing to appease — and SDL2 2.32.10 relies on
++# seeing "visionOS" to self-detect (cmake/sdlplatform.cmake sets VISIONOS TRUE,
++# which every one of its platform conditionals ORs against). Flipping the name
++# would silently send SDL down its macOS source list.
++if(CMAKE_SYSTEM_NAME STREQUAL "visionOS")
++    set(SM64_VISIONOS 1)
++    # set(IOS 1): CMake's Platform/visionOS-Initialize.cmake sets NO platform
++    # variable at all (its iOS counterpart sets IOS 1), and SDL2's
++    # cmake/sdlchecks.cmake:1259 gates its hidapi platform backend on a bare
++    # `if(IOS OR TVOS)` — the one place SDL forgets to OR in VISIONOS. Without
++    # this, src/hidapi/*.c still compiles and calls PLATFORM_hid_*, but no
++    # implementation is selected => 17 undefined symbols at app link. This is
++    # the ONLY bare IOS use in sdlchecks.cmake, and SDL2's CMakeLists platform
++    # groups already match on VISIONOS, so this flips exactly that one site and
++    # nothing else. (src/hidapi/ios/hid.m compiles clean for xros; it brings in
++    # CoreBluetooth, which this target already links.)
++    set(IOS 1)
++    message(STATUS "sm64coopdx: targeting visionOS (Metal backend, no OpenGL)")
++endif()
++
+ set(CMAKE_C_STANDARD 11)
+ set(CMAKE_CXX_STANDARD 17)
+ 
+@@ -28,8 +52,6 @@
+     IMMEDIATELOAD
+     DYNOS
+     COOP
+-    USE_GLES
+-    RAPI_GL=1
+     WAPI_SDL2=1
+     AAPI_SDL2=1
+     CAPI_SDL2=1
+@@ -41,6 +63,19 @@
+     JUICE_STATIC
+ )
+ 
++# ---- Renderer selection ----
++# iOS renders through OpenGL ES. visionOS cannot: the xrOS SDK marks EVERY GL
++# entry point unavailable (not just EAGLContext — glGetIntegerv et al too), so
++# the Metal backend is mandatory and GL is compiled out entirely rather than
++# merely left unused. TARGET_IOS above stays defined for visionOS on purpose:
++# it is this fork's own define (not TargetConditionals' TARGET_OS_IOS, which is
++# 0 on xros) and it carries platform.c's Documents/bundle-root semantics.
++if(SM64_VISIONOS)
++    add_compile_definitions(RAPI_METAL=1 ENABLE_METAL_BACKEND=1 SM64_NO_OPENGL=1)
++else()
++    add_compile_definitions(USE_GLES RAPI_GL=1)
++endif()
++
+ # ---- Compiler flags ----
+ add_compile_options(
+     -fsigned-char
+@@ -102,6 +137,10 @@
+ list(FILTER SRC_C_FILES EXCLUDE REGEX "src/pc/gfx/gfx_sdl1\\.")
+ list(FILTER SRC_C_FILES EXCLUDE REGEX "src/pc/audio/audio_sdl1\\.")
+ list(FILTER SRC_C_FILES EXCLUDE REGEX "src/pc/controller/controller_sdl1\\.")
++# visionOS: gfx_opengl.c cannot compile against the xrOS SDK at all.
++if(SM64_VISIONOS)
++    list(FILTER SRC_C_FILES EXCLUDE REGEX "src/pc/gfx/gfx_opengl\\.c$")
++endif()
+ # .inc.c files are #included by other files, not compiled standalone
+ list(FILTER SRC_C_FILES EXCLUDE REGEX "\\.inc\\.c$")
+ 
+@@ -152,10 +191,21 @@
+     ${BUILD_PC_DIR}/assets/demo_data.c
+ )
+ 
++# Metal rendering backend (Objective-C++). visionOS-only for now; the iOS target
++# still renders through GLES.
++if(SM64_VISIONOS)
++    set(SRC_OBJCPP_FILES ${GAME_ROOT}/src/pc/gfx/gfx_metal.mm)
++    set_source_files_properties(${SRC_OBJCPP_FILES} PROPERTIES
++        COMPILE_OPTIONS "-fobjc-arc")
++else()
++    set(SRC_OBJCPP_FILES)
++endif()
++
+ # All sources combined
+ set(ALL_SOURCES
+     ${SRC_C_FILES}
+     ${SRC_CPP_FILES}
++    ${SRC_OBJCPP_FILES}
+     ${ACTORS_C_FILES}
+     ${LEVELS_TOP_C_FILES}
+     ${LEVEL_C_FILES}
+@@ -189,6 +239,38 @@
+     message(STATUS "SDL2 iOS gamepad fix patch already applied or not needed")
+ endif()
+ 
++# SDL 2.32.10 has zero visionOS awareness: its UIKit backend leans on
++# UIScreen/status-bar APIs the xrOS SDK marks unavailable. This patch (ported
++# from the Shipwright visionOS bring-up) supplies UIScreen-free display modes, a
++# scene-glued window, the 90->120Hz display link, the drawable resize debounce
++# and the launch-once guard. It composes with the fork's iOS gamepad fix in
++# either order (verified both directions on this exact tree). Applied through the
++# fork's own git-apply mechanism above.
++if(SM64_VISIONOS)
++    if(NOT SM64_SDL2_VISIONOS_PATCH)
++        message(FATAL_ERROR "SM64_SDL2_VISIONOS_PATCH is required for visionOS builds")
++    endif()
++    execute_process(
++        COMMAND git apply --check ${SM64_SDL2_VISIONOS_PATCH}
++        WORKING_DIRECTORY ${GAME_ROOT}/lib/SDL2-source
++        RESULT_VARIABLE VISIONOS_PATCH_CHECK
++        ERROR_QUIET
++    )
++    if(VISIONOS_PATCH_CHECK EQUAL 0)
++        execute_process(
++            COMMAND git apply ${SM64_SDL2_VISIONOS_PATCH}
++            WORKING_DIRECTORY ${GAME_ROOT}/lib/SDL2-source
++            RESULT_VARIABLE VISIONOS_PATCH_APPLY
++        )
++        if(NOT VISIONOS_PATCH_APPLY EQUAL 0)
++            message(FATAL_ERROR "SDL2 visionOS compat patch failed to apply")
++        endif()
++        message(STATUS "Applied SDL2 visionOS compat patch")
++    else()
++        message(STATUS "SDL2 visionOS compat patch already applied or not needed")
++    endif()
++endif()
++
+ add_subdirectory(${GAME_ROOT}/lib/SDL2-source SDL2 EXCLUDE_FROM_ALL)
+ include_directories(${GAME_ROOT}/lib/SDL2-source/include)
+ 
+@@ -213,18 +295,42 @@
+     ${GAME_ROOT}/src/pc/utils/miniaudio.c
+     PROPERTIES LANGUAGE OBJC
+ )
++
++# Dependency slices. The vendored lib/*/ios/*.a are Mach-O platform 2 (iOS) and
++# CANNOT link into an xrOS binary, so visionOS builds take real XROS(11) /
++# XROS_SIMULATOR(12) slices from scripts/build-deps-xros.sh instead. Fail loudly
++# rather than let the linker produce a confusing platform error.
++if(SM64_VISIONOS)
++    if(NOT SM64_XROS_DEPS_PREFIX)
++        message(FATAL_ERROR
++            "SM64_XROS_DEPS_PREFIX is required for visionOS builds "
++            "(run scripts/build-deps-xros.sh; the vendored lib/*/ios/*.a are iOS-platform)")
++    endif()
++    set(SM64_LUA_LIB     ${SM64_XROS_DEPS_PREFIX}/lib/liblua53.a)
++    set(SM64_COOPNET_LIB ${SM64_XROS_DEPS_PREFIX}/lib/libcoopnet.a)
++    set(SM64_JUICE_LIB   ${SM64_XROS_DEPS_PREFIX}/lib/libjuice.a)
++    foreach(SM64_DEP ${SM64_LUA_LIB} ${SM64_COOPNET_LIB} ${SM64_JUICE_LIB})
++        if(NOT EXISTS ${SM64_DEP})
++            message(FATAL_ERROR "missing xrOS dependency slice: ${SM64_DEP}")
++        endif()
++    endforeach()
++else()
++    set(SM64_LUA_LIB     ${GAME_ROOT}/lib/lua/ios/liblua53.a)
++    set(SM64_COOPNET_LIB ${GAME_ROOT}/lib/coopnet/ios/libcoopnet.a)
++    set(SM64_JUICE_LIB   ${GAME_ROOT}/lib/coopnet/ios/libjuice.a)
++endif()
+ 
+ target_link_libraries(sm64coopdx
+     SDL2main
+     SDL2-static
+-    ${GAME_ROOT}/lib/lua/ios/liblua53.a
++    ${SM64_LUA_LIB}
+     z
+ )
+ 
+-# CoopNet (prebuilt static libraries for iOS)
++# CoopNet
+ target_link_libraries(sm64coopdx
+-    ${GAME_ROOT}/lib/coopnet/ios/libcoopnet.a
+-    ${GAME_ROOT}/lib/coopnet/ios/libjuice.a
++    ${SM64_COOPNET_LIB}
++    ${SM64_JUICE_LIB}
+ )
+ 
+ # Marketing version -> CFBundleShortVersionString (via $(MARKETING_VERSION) in Info.plist).
+@@ -232,6 +338,29 @@
+ # version matches the GitHub release tag (required for AltStore/SideStore source updates).
+ set(IOS_MARKETING_VERSION "1.0" CACHE STRING "iOS app CFBundleShortVersionString")
+ 
++# Device family 7 = Vision. The visionOS plist drops LSRequiresIPhoneOS (an
++# iOS-only key) and adds NSLocalNetworkUsageDescription, without which libjuice's
++# ICE host-candidate gathering — i.e. LAN co-op — fails silently.
++if(SM64_VISIONOS)
++    set(SM64_DEVICE_FAMILY "7")
++    if(NOT SM64_VISIONOS_PLIST)
++        message(FATAL_ERROR "SM64_VISIONOS_PLIST is required for visionOS builds")
++    endif()
++    set(SM64_INFO_PLIST ${SM64_VISIONOS_PLIST})
++else()
++    set(SM64_DEVICE_FAMILY "1,2")
++    set(SM64_INFO_PLIST ${GAME_ROOT}/platform/ios/Info.plist)
++endif()
++
++# Signing team. This has to be a cache variable rather than
++# -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM: the DEVELOPMENT_TEAM below is a
++# TARGET property, and in Xcode target-level build settings override
++# project-level ones (which is where CMAKE_XCODE_ATTRIBUTE_* lands). The
++# command-line value is accepted, written to the project level, and then
++# silently beaten by the empty target value -> "Signing for 'sm64coopdx'
++# requires a development team". Default "" keeps the iOS target unchanged.
++set(SM64_DEVELOPMENT_TEAM "" CACHE STRING "Apple Developer team ID used to sign the app")
++
+ # iOS app bundle properties
+ set_target_properties(sm64coopdx PROPERTIES
+     MACOSX_BUNDLE TRUE
+@@ -239,20 +368,45 @@
+     MACOSX_BUNDLE_BUNDLE_NAME "SM64CoopDX"
+     MACOSX_BUNDLE_BUNDLE_VERSION "1.0"
+     MACOSX_BUNDLE_SHORT_VERSION_STRING "${IOS_MARKETING_VERSION}"
+-    MACOSX_BUNDLE_INFO_PLIST ${GAME_ROOT}/platform/ios/Info.plist
+-    XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
++    MACOSX_BUNDLE_INFO_PLIST ${SM64_INFO_PLIST}
++    XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "${SM64_DEVICE_FAMILY}"
+     XCODE_ATTRIBUTE_CODE_SIGN_STYLE "Automatic"
+     XCODE_ATTRIBUTE_IPHONEOS_DEPLOYMENT_TARGET "15.0"
+     XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "com.sm64coopdx.ios"
+-    XCODE_ATTRIBUTE_DEVELOPMENT_TEAM ""
++    XCODE_ATTRIBUTE_DEVELOPMENT_TEAM "${SM64_DEVELOPMENT_TEAM}"
+     XCODE_ATTRIBUTE_ASSETCATALOG_COMPILER_APPICON_NAME "AppIcon"
+     XCODE_ATTRIBUTE_MARKETING_VERSION "${IOS_MARKETING_VERSION}"
+     RESOURCE "${ASSET_CATALOG}"
+ )
+ 
+-# iOS frameworks
++# Archive/export needs the app INSTALLED into the .xcarchive. CMake emits
++# INSTALL_PATH = "" for every target, so `xcodebuild archive` runs the install
++# action, copies the app nowhere, and produces an archive with an EMPTY
++# Products/ and no ApplicationProperties in its Info.plist. -exportArchive then
++# fails with the genuinely unhelpful
++#     exportOptionsPlist error for key "method" expected one {} but found debugging
++# — "one {}" being an EMPTY set of valid distribution methods, because Xcode
++# cannot classify an archive that contains no application. It reads like the
++# export method is wrong; the method is fine and the archive is empty (M-28).
++#
++# visionOS-gated so the iOS target's generated project stays bit-for-bit
++# unchanged, and set as TARGET properties because CMake's own target-level
++# INSTALL_PATH = "" would otherwise beat a project-level cache attribute — the
++# same precedence trap as DEVELOPMENT_TEAM above.
++if(SM64_VISIONOS)
++    set_target_properties(sm64coopdx PROPERTIES
++        XCODE_ATTRIBUTE_INSTALL_PATH "$(LOCAL_APPS_DIR)"
++        XCODE_ATTRIBUTE_SKIP_INSTALL "NO"
++    )
++endif()
++
++# Frameworks. OpenGLES exists in the xrOS SDK as a .tbd but every API in it is
++# marked unavailable (M-1), so visionOS must not link it.
++if(NOT SM64_VISIONOS)
++    target_link_libraries(sm64coopdx "-framework OpenGLES")
++endif()
++
+ target_link_libraries(sm64coopdx
+-    "-framework OpenGLES"
+     "-framework Foundation"
+     "-framework UIKit"
+     "-framework AudioToolbox"

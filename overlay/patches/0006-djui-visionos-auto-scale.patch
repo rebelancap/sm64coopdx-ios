@@ -1,0 +1,101 @@
+Overlay patch 0006: let DJUI's auto scale track a 4K drawable on visionOS.
+
+THE BUG (MEASUREMENTS M-15/M-16). On the visionOS simulator the game renders
+correctly but the DJUI menu is a narrow strip of unreadable text, while the 3D
+scene fills the window. Found by LOOKING at artifacts/vision-sim-03.png, then
+traced to a single clamp.
+
+ROOT CAUSE — src/pc/djui/djui_gfx.c:74:
+
+    return clamp(round_to_multiple_f(((f32)windowHeight / (f32)SCREEN_HEIGHT) / 4.0f, 0.5f), 0.5f, 1.5f);
+
+with SCREEN_HEIGHT = 240 (include/config.h:28) and `windowHeight` being the
+DRAWABLE height (gfx_sdl.c:288-294 returns the drawable when hidpi is active;
+the sim's config has `hidpi true`).
+
+The formula is really "scale = drawableHeight / 960" — a linear DPI scale. The
+1.5f ceiling therefore saturates at a 1440-high drawable. Our visionOS drawable
+is ~2160 high, because the SDL2 visionOS compat patch deliberately pushes the
+drawable to a ~3840 long edge for panel crispness
+(SDL_uikitmetalview.m:43-50, Sm64Ios_VisionLongEdge default 3840 — the
+VISION-PRO-GUIDE §1.2 fidelity lever). So the drawable keeps growing while the
+UI scale stops, and the menu shrinks:
+
+    drawable H | raw scale | clamped | djui multiplier (240/H)*scale
+    -----------+-----------+---------+------------------------------
+      768      |   0.80    |  1.00   | 0.3125   <- the design reference
+     1568      |   1.63    |  1.50   | 0.2296   <- desktop oracle
+     2160      |   2.25    |  1.50 * | 0.1667   <- visionOS, SATURATED
+
+THE SMALL MENU IS THE FIDELITY LEVER WORKING, NOT FAILING. The correct fix is
+to let the UI scale follow the drawable — NOT to shrink the drawable so the menu
+fits, which would trade away the port's single biggest 2D fidelity lever to
+paper over a UI-scale bug.
+
+THE FIX: raise the auto-scale ceiling on visionOS only (4.0f tracks a drawable
+up to 3840 high, comfortably past our ~2160). At 2160 auto now yields 2.5,
+giving a multiplier of 0.2778 — slightly LARGER than the desktop oracle's
+0.2296, i.e. comfortably readable.
+
+WHY GATED TO visionOS: a 4K desktop monitor has the same latent saturation, but
+changing desktop/iOS behaviour is out of scope and risks regressing a shipping
+target. The charter's rule is that the iOS target stays bit-for-bit unaffected.
+
+WHY NOT TOUCH configDjuiScale's 1..4 enum: those are persisted in
+sm64config.txt and read by djui_panel_menu_options.c:146's selectionbox
+(5 choices) with configfile.c:915 clamping >=5 to 0. Widening the enum would be
+a persisted-CVar semantics change needing boot-time migration — precisely the
+trap CLAUDE.md flags ("menus that do comboMap.at(storedValue) ABORT on unmapped
+legacy values"). Only the auto (0) branch changes here, so every stored value
+keeps its exact meaning.
+
+WHY TargetConditionals AND NOT SM64_VISIONOS: SM64_VISIONOS is a CMake variable,
+not a compile definition (overlay 0005 adds RAPI_METAL/ENABLE_METAL_BACKEND/
+SM64_NO_OPENGL, not SM64_VISIONOS). djui_gfx.c is cross-platform, so the include
+is guarded by __APPLE__ to keep Windows/Linux builds untouched. Self-contained in
+this patch — no edits inside another patch's hunks (charter D6).
+
+NOT YET VERIFIED ON-SIM: the numbers above are derived, and the exact drawable
+height is inferred (3840 long edge / 16:9), not instrumented. This patch must be
+validated by a fresh simctl screenshot that is LOOKED AT before it is called
+done.
+
+--- a/src/pc/djui/djui_gfx.c
++++ b/src/pc/djui/djui_gfx.c
+@@ -11,6 +11,27 @@
+ #include "pc/debuglog.h"
+ #include "engine/math_util.h"
+ 
++#ifdef __APPLE__
++#include <TargetConditionals.h>
++#endif
++
++/* Ceiling for DJUI's auto (configDjuiScale == 0) scale.
++ *
++ * The auto formula below is effectively `drawableHeight / 960`, so a ceiling of
++ * 1.5 saturates at a 1440-high drawable. visionOS deliberately renders into a
++ * ~3840-long-edge drawable for panel crispness (see the SDL2 visionOS compat
++ * patch), i.e. ~2160 high, so the stock ceiling would freeze the UI scale while
++ * the drawable kept growing and the menu would shrink to unreadable. 4.0 tracks
++ * up to a 3840-high drawable.
++ *
++ * visionOS-only on purpose: a 4K desktop monitor has the same latent
++ * saturation, but the iOS/desktop targets ship today and are out of scope. */
++#if defined(TARGET_OS_VISION) && TARGET_OS_VISION
++#define DJUI_AUTO_SCALE_MAX 4.0f
++#else
++#define DJUI_AUTO_SCALE_MAX 1.5f
++#endif
++
+ const Gfx dl_djui_display_list_begin[] = {
+     gsSPTextureAddrDjui(1),
+     gsSPEndDisplayList(),
+@@ -71,7 +92,7 @@
+     if (configDjuiScale == 0) { // auto
+         u32 windowWidth, windowHeight;
+         gfx_get_dimensions(&windowWidth, &windowHeight);
+-        return clamp(round_to_multiple_f(((f32)windowHeight / (f32)SCREEN_HEIGHT) / 4.0f, 0.5f), 0.5f, 1.5f);
++        return clamp(round_to_multiple_f(((f32)windowHeight / (f32)SCREEN_HEIGHT) / 4.0f, 0.5f), 0.5f, DJUI_AUTO_SCALE_MAX);
+     } else {
+         switch (configDjuiScale) {
+             case 1:  return 0.5f;

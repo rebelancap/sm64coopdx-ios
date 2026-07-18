@@ -1,0 +1,23 @@
+vendor/
+work/
+spikes/
+build-*/
+ota/
+*.z64
+.DS_Store
+
+# --- kept local, never published (AI/dev-process docs + personal infra) ---
+CLAUDE.md
+DECISIONS.md
+MEASUREMENTS.md
+QUESTIONS.md
+STEREO-3D-FIDELITY-RECOMMENDATIONS.md
+artifacts/
+tmp/
+# console-bridge client — embeds the personal tailnet IP
+scripts/bridge.py
+# personal OTA: tailnet host + ASC key IDs
+scripts/publish-vision-ota.sh
+
+# full-history backups — never publish
+*.bundle
