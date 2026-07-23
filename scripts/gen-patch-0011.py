@@ -254,7 +254,7 @@ void sm64_gfx_set_3d_eye(int eye) {
 }
 
 void sm64_gfx_set_3d_params(float separation, float convergence, float hud_depth) {
-    if (separation >= 0.0f && separation <= 40.0f) { sm64_gfx_3d_sep = separation; }
+    if (separation >= 0.0f && separation <= 60.0f) { sm64_gfx_3d_sep = separation; } // clamp raised 40->60 for the 2026-07-23 depth rescale (new slider max 54)
     if (convergence >= 50.0f && convergence <= 8000.0f) { sm64_gfx_3d_conv = convergence; }
     if (hud_depth >= 0.0f && hud_depth <= 3.0f) { sm64_gfx_3d_hud = hud_depth; }
 }

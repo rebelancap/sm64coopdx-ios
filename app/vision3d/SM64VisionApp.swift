@@ -92,11 +92,40 @@ struct SM64CompositorConfiguration: CompositorLayerConfiguration {
     func makeConfiguration(capabilities: LayerRenderer.Capabilities,
                            configuration: inout LayerRenderer.Configuration) {
         let layouts = capabilities.supportedLayouts(options: [])
-        configuration.layout = layouts.contains(.layered) ? .layered : .dedicated
-        configuration.isFoveationEnabled = false
+        // FOVEATED RENDERING — the de-blur fix (VISIONOS-FOVEATION-GUIDE; origin
+        // Ship of Harkinian D-036, device-validated 2026-07-22).
+        //
+        // Our engine's image is sharp; the softness the 3D panel had vs the 2D
+        // window was lost in the COMPOSITOR HOP. A 2D window is composited by the
+        // SYSTEM at panel density with dynamic eye-tracked foveation; our immersive
+        // panel instead renders through our OWN CompositorServices drawable — a
+        // fixed, uniformly-dense allocation the system then resamples to the panel.
+        // Enabling foveation makes THAT drawable eye-tracked variable-density,
+        // concentrating resolution exactly where the user looks: the effective
+        // foveal resolution multiplies and the blur is gone. The engine (Metal
+        // offscreen render) is untouched — only this panel-composite pass changes.
+        // Cost is NEGATIVE (fewer total fragments than uniform density); SoH saw no
+        // regression at 90-120 Hz. Ships UNCONDITIONAL: a toggle is just a way to
+        // accidentally get the blur back.
+        let fov = capabilities.supportsFoveation
+        configuration.isFoveationEnabled = fov
+        // TRAP (cost SoH a device round): .layered layout carries ONE multi-layer
+        // rate map, but our per-slice render passes each rasterize with layer 0's
+        // (left eye's) map — the compositor then unwarps the right eye with its own,
+        // giving a right-eye fisheye that zooms with head motion. .dedicated gives
+        // each eye its OWN texture AND its OWN rate map, which the per-view
+        // texture-map targeting in sm64_immersive.m consumes correctly.
+        if fov && layouts.contains(.dedicated) {
+            configuration.layout = .dedicated
+        } else {
+            configuration.layout = layouts.contains(.layered) ? .layered : .dedicated
+        }
+        // Do NOT touch maxRenderQuality (visionOS 26 API): requesting a raised
+        // value ABORTS the process at immersive entry, on sim AND device, with no
+        // non-aborting validation call. Foveation alone delivers the win.
         configuration.colorFormat = capabilities.supportedColorFormats.first ?? .bgra8Unorm_srgb
         configuration.depthFormat = capabilities.supportedDepthFormats.first ?? .depth32Float
-        NSLog("[sm64vp] Swift: compositor configured (layered=\(layouts.contains(.layered)))")
+        NSLog("[sm64vp] Swift: compositor configured (layered=\(layouts.contains(.layered)) foveation=\(fov))")
     }
 }
 
@@ -140,9 +169,16 @@ struct SM64RootView: View {
             // surface makes SwiftUI center-clip the content and eat the Done bar.
             .sheet(isPresented: $model.showSettings) {
                 VStack(spacing: 0) {
-                    HStack {
+                    HStack(spacing: 12) {
                         Text("Settings").font(.title3.weight(.semibold))
                         Spacer()
+                        // Reset moved here (2026-07-23) from the UIKit table header
+                        // to sit just left of Done. Drives the live settings table
+                        // via the SM64_ResetVision3D bridge (resets + reloads the
+                        // visible sliders).
+                        Button("Reset") { SM64_ResetVision3D() }
+                            .font(.title3)
+                            .buttonStyle(.bordered)
                         Button("Done") { model.showSettings = false }
                             .font(.title3)
                             .buttonStyle(.borderedProminent)

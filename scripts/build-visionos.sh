@@ -23,7 +23,7 @@ DEPS="$ROOT/work/xros-deps/device"
 TEAM="${SM64_IOS_TEAM:-57G8J46Z2T}"
 # CFBundleShortVersionString. Must equal the git tag and GitHub release string, or
 # SideStore never offers the update (it string-compares this against the source JSON).
-MARKETING_VERSION="${SM64_MARKETING_VERSION:-1.0.0}"
+MARKETING_VERSION="${SM64_MARKETING_VERSION:-1.1.1}"
 
 [[ -d "$VENDOR/.git" ]] || "$ROOT/scripts/bootstrap.sh"
 [[ -d "$VENDOR/lib/SDL2-source/.git" ]] || "$ROOT/scripts/fetch-sdl2.sh"

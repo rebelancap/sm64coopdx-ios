@@ -100,6 +100,11 @@ static NSString *sm64_value_text(NSString *key, float v) {
 @interface SM64SettingsVC : UITableViewController
 @end
 
+// Weak handle to the live settings table so the SwiftUI header's Reset button
+// (bridged via SM64_ResetVision3D) can reset AND reload the visible sliders.
+// Weak: a dismissed sheet must not be retained, and a stale pointer becomes nil.
+static __weak SM64SettingsVC *g_settingsVC = nil;
+
 @implementation SM64SettingsVC {
     NSArray<NSArray<SM64Row *> *> *_rows;
     NSArray<NSString *> *_sections;
@@ -107,6 +112,7 @@ static NSString *sm64_value_text(NSString *key, float v) {
 
 - (void)viewDidLoad {
     [super viewDidLoad];
+    g_settingsVC = self;
     _sections = @[ @"Vision Pro 3D" ];
     _rows = @[ @[
         mkrow(@"Screen Distance", @"dist", SM64_ROW_SLIDER, 1.0, 8.0, SM64_DEF_DIST),
@@ -115,11 +121,13 @@ static NSString *sm64_value_text(NSString *key, float v) {
         mkrow(@"Screen Width", @"halfW", SM64_ROW_SLIDER, 0.4, 8.0, SM64_DEF_HALFW),
         mkrow(@"Screen Height", @"halfH", SM64_ROW_SLIDER, 0.3, 6.0, SM64_DEF_HALFH),
         mkrow(@"Screen Position Height", @"posH", SM64_ROW_SLIDER, -1.5, 10.0, SM64_DEF_POSH),
-        // Comfort batch 3 item 3: MAX raised 13.0 -> 18.0 (= 200% of the 9.0
-        // default) per device feedback that 144% "wasn't really pushing the
-        // boundaries." Default stays 9.0 (100%); the setter clamps sep<=40 so 18
-        // passes (gfx_pc.c sm64_gfx_set_3d_params). The % readout is v/SM64_DEF_SEP*100.
-        mkrow(@"Stereo Depth", @"sep", SM64_ROW_SLIDER, 0.0, 36.0, SM64_DEF_SEP),  // max = 200% of the new 18.0 default (rescale 2026-07-17)
+        // Rescale 2026-07-23 (user: "it doesn't go high enough"): default 18->27,
+        // MAX 36->54. The % readout is v/SM64_DEF_SEP*100, so re-centering the
+        // denominator on the new 27 default keeps the SLIDER looking identical
+        // (0-200%, default 100%) while every % is 1.5x the old separation and the
+        // top is 1.5x deeper. The setter clamps sep<=60 so 54 passes (gfx_pc.c
+        // sm64_gfx_set_3d_params, raised from 40 in gen-patch-0011).
+        mkrow(@"Stereo Depth", @"sep", SM64_ROW_SLIDER, 0.0, 54.0, SM64_DEF_SEP),  // max 54 = 200% of the new 27.0 default
         // Item 6: Focus Distance "Auto" derives the convergence from the panel
         // size (on by default). When on, the manual slider below is disabled and
         // shows the derived value; turn Auto off to set it by hand.
@@ -140,32 +148,23 @@ static NSString *sm64_value_text(NSString *key, float v) {
 - (NSInteger)tableView:(UITableView *)t numberOfRowsInSection:(NSInteger)s { return _rows[s].count; }
 
 // Custom header views get a COMPRESSED height without an explicit delegate,
-// which shoves the title/Reset up under the sheet's own Settings bar.
-- (CGFloat)tableView:(UITableView *)t heightForHeaderInSection:(NSInteger)s { return 72.0; }
+// which shoves the title up under the sheet's own Settings bar.
+- (CGFloat)tableView:(UITableView *)t heightForHeaderInSection:(NSInteger)s { return 44.0; }
 
-// The "Vision Pro 3D" header carries the Reset control.
+// The "Vision Pro 3D" section title. Reset now lives in the SwiftUI sheet header
+// beside Done (2026-07-23, SM64_ResetVision3D), so the header carries the label
+// only — no trailing button to gaze-pinch under the sheet bar.
 - (UIView *)tableView:(UITableView *)t viewForHeaderInSection:(NSInteger)s {
-    UIView *hv = [[UIView alloc] initWithFrame:CGRectMake(0, 0, t.bounds.size.width, 64)];
+    UIView *hv = [[UIView alloc] initWithFrame:CGRectMake(0, 0, t.bounds.size.width, 44)];
     UILabel *l = [UILabel new];
     l.text = _sections[s];
     l.font = [UIFont systemFontOfSize:20 weight:UIFontWeightSemibold];
     l.textColor = UIColor.labelColor;
     l.translatesAutoresizingMaskIntoConstraints = NO;
-    // A REAL bordered button: the bare-text version sits tight under the sheet's
-    // bar and is nearly impossible to gaze-pinch.
-    UIButtonConfiguration *cfg = [UIButtonConfiguration tintedButtonConfiguration];
-    cfg.title = @"Reset";
-    cfg.contentInsets = NSDirectionalEdgeInsetsMake(10, 22, 10, 22);
-    UIButton *reset = [UIButton buttonWithConfiguration:cfg primaryAction:nil];
-    reset.translatesAutoresizingMaskIntoConstraints = NO;
-    [reset addTarget:self action:@selector(resetVision3D) forControlEvents:UIControlEventTouchUpInside];
     [hv addSubview:l];
-    [hv addSubview:reset];
     [NSLayoutConstraint activateConstraints:@[
         [l.leadingAnchor constraintEqualToAnchor:hv.leadingAnchor constant:20],
         [l.bottomAnchor constraintEqualToAnchor:hv.bottomAnchor constant:-6],
-        [reset.trailingAnchor constraintEqualToAnchor:hv.trailingAnchor constant:-20],
-        [reset.centerYAnchor constraintEqualToAnchor:l.centerYAnchor],
     ]];
     return hv;
 }
@@ -300,6 +299,17 @@ static NSString *sm64_value_text(NSString *key, float v) {
 
 UIViewController *SM64_MakeSettingsNav(void) {
     return [[SM64SettingsVC alloc] initWithStyle:UITableViewStyleInsetGrouped];
+}
+
+// Bridged to the SwiftUI sheet header's Reset button (declared in
+// sm64_vision_host.h). Marshals to the main thread and drives the live table's
+// -resetVision3D (which clears the persisted values, re-applies, and reloads the
+// visible sliders). Sending to a nil weak handle is a no-op, so this is safe when
+// the sheet is closed.
+void SM64_ResetVision3D(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [g_settingsVC resetVision3D];
+    });
 }
 
 #endif // SM64_VISION_3D

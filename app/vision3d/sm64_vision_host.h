@@ -38,7 +38,7 @@
 #define SM64_DEF_HALFW    2.75f
 #define SM64_DEF_HALFH    1.547f  // 16:9 against halfW — the default panel shape
 #define SM64_DEF_POSH     0.0f
-#define SM64_DEF_SEP      18.0f  // 100% on the depth slider (user rescale 2026-07-17: the old 9.0 default read as too subtle; the old 200% is the new 100%)
+#define SM64_DEF_SEP      27.0f  // 100% on the depth slider. Rescale 2026-07-23: default 18->27, slider max 36->54. The % readout is v/SM64_DEF_SEP*100, so the new default (27) reads 100% and the new max (54) reads 200% — the slider LOOKS unchanged but every % is 1.5x the old separation, and the top of the range is 1.5x deeper than before (user: "it doesn't go high enough").
 #define SM64_DEF_CONV     1524.0f // ~50 ft; manual fallback when convAuto is off
 #define SM64_DEF_CONVAUTO 1.0f    // 1 = auto-derive convergence from panel size
 #define SM64_DEF_HUD      0.0f    // flush on panel (HUD Depth slider removed)
@@ -54,6 +54,12 @@
 // directly works in 2D but silently FAILS over an open ImmersiveSpace, which is
 // why this is handed to SwiftUI rather than presented here (guide §2.7).
 UIViewController *SM64_MakeSettingsNav(void);
+
+// Reset all 3D panel/stereo settings to defaults. Bridged so the SwiftUI sheet
+// header's Reset button (moved next to Done) can drive the live UIKit table —
+// it clears the persisted values, re-applies, and reloads the visible sliders.
+// No-op if the settings sheet is not currently open.
+void SM64_ResetVision3D(void);
 
 #endif // SM64_VISION_3D
 #endif // SM64_VISION_HOST_H

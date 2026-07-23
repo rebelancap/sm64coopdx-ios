@@ -114,18 +114,47 @@ void sm64_3d_set_height(float h) {
 
 // Comfort batch 2 item 2 (panel reshape). The engine renders AT the panel's
 // aspect (halfW:halfH) so the image FILLS a reshaped panel with no bars and no
-// stretch — the letterbox in the panel shader then degenerates to a no-op. The
-// 3840 long-edge budget is kept regardless of shape (extreme aspects only REDUCE
-// the total pixel count — short_edge = 3840/aspect — so there is no thermal
-// downside to ultrawide/ultratall). Both gfx_metal (the offscreen eye texture)
-// and gfx_pc (gfx_current_dimensions => FOV + viewport, overlay 0011) size from
-// this one function, so FOV, viewport and texture can never disagree. Read only
-// on the main thread (game loop + settings sliders both run there), so no lock.
+// stretch — the letterbox in the panel shader then degenerates to a no-op. Both
+// gfx_metal (the offscreen eye texture) and gfx_pc (gfx_current_dimensions =>
+// FOV + viewport, overlay 0011) size from this one function, so FOV, viewport
+// and texture can never disagree. Read only on the main thread (game loop +
+// settings sliders both run there), so no lock.
+//
+// ADAPTIVE SSAA (2026-07-23). The base 3840 long-edge budget gives ~2x
+// supersampling on the DEFAULT panel — crisp. What the eye sees is game pixels
+// per DEGREE, so as the panel is enlarged (or moved closer) its angular size
+// grows, the fixed 3840 pixels spread thinner, the supersample ratio falls, and
+// the sub-native render becomes visible. (Foveation removed the compositor-side
+// blur that used to MASK this, so on a big panel the game texture is now the
+// limiter — the guide's "sub-native SSAA" pairing.) Fix: scale the budget UP with
+// the panel's angular size so the supersample ratio stays ~constant — a bigger
+// panel renders as crisp as the default. Angular size (not linear) is the right
+// driver: it matches the fidelity report's px/deg and folds in distance for free
+// (closer => larger angle => more SSAA). budget ∝ atan(half/dist) holds the ratio
+// exactly (the footprint the fidelity math measures is 2*atan(half/dist)*px_rad).
+// Bounded: grow>=1 so the default panel and anything SMALLER are byte-identical
+// to before (no regression, no wasted GPU); grow<=SM64_SSAA_CAP because a 52 ft
+// panel genuinely cannot be both fully sharp AND 90 Hz-locked — the cap is the
+// smoothness/sharpness knee (1.4x "Balanced", user 2026-07-23). Quantised to
+// 128 px so a size-slider DRAG reallocates the offscreen textures at discrete
+// stops, not every pixel of travel.
+#define SM64_SSAA_CAP 1.4f
 void sm64_3d_get_render_target_size(int *w, int *h) {
     float aspect = (sm64_screenHalfH > 0.01f) ? (sm64_screenHalfW / sm64_screenHalfH)
                                               : (16.0f / 9.0f);
     if (!(aspect > 0.02f && aspect < 50.0f)) { aspect = 16.0f / 9.0f; }
-    const int budget = 3840; // long-edge fidelity budget (M-21)
+    // How much bigger the panel subtends than the DEFAULT panel, per axis
+    // (SM64_DEF_HALFW/HALFH/DIST = 2.75/1.547/3.6 — the literals this file seeds
+    // the panel statics with). Whichever axis grew more drives the budget.
+    const float dist = (sm64_screenDist > 0.1f) ? sm64_screenDist : 3.6f;
+    const float angW0 = atanf(2.75f / 3.6f), angH0 = atanf(1.547f / 3.6f);
+    float growW = atanf(sm64_screenHalfW / dist) / angW0;
+    float growH = atanf(sm64_screenHalfH / dist) / angH0;
+    float grow = (growW > growH) ? growW : growH;
+    float scale = (grow < 1.0f) ? 1.0f : (grow > SM64_SSAA_CAP ? SM64_SSAA_CAP : grow);
+    int budget = (int)(3840.0f * scale);
+    budget = ((budget + 64) / 128) * 128;   // quantise to 128 px (drag-hitch guard)
+    if (budget < 3840) { budget = 3840; }    // never below the default budget
     int rw, rh;
     if (aspect >= 1.0f) { rw = budget; rh = (int)lroundf((float)budget / aspect); }
     else                { rh = budget; rw = (int)lroundf((float)budget * aspect); }
@@ -749,8 +778,11 @@ void sm64_3d_immersive_run(void *layer_renderer_ptr) {
             // which is the same pixel format and dimensions as the engine texture.
             if (!monoTex) { monoTex = sm64_eyeCopy[0] ? sm64_eyeCopy[0] : sm64_eyeCopy[1]; }
 
+            // texture 0's format for the srgbDecode probe below — identical across
+            // all drawable textures, so index 0 is fine regardless of layout. The
+            // per-eye color/depth ATTACHMENTS are fetched inside the view loop via
+            // the view's texture-map index (foveation-correct targeting).
             id<MTLTexture> color = cp_drawable_get_color_texture(drawable, 0);
-            id<MTLTexture> depth = cp_drawable_get_depth_texture(drawable, 0);
             size_t views = cp_drawable_get_view_count(drawable);
 
             simd_float4x4 placement = sm64_haveScreenAnchor
@@ -780,19 +812,45 @@ void sm64_3d_immersive_run(void *layer_renderer_ptr) {
             const bool debugClear = sm64_debug_clear();
 
             for (size_t v = 0; v < views; v++) {
+                // Foveation-correct, LAYOUT-AGNOSTIC targeting via the view's
+                // texture map (VISIONOS-FOVEATION-GUIDE step 2) — never hardcode
+                // texture 0 / slice v. With the .dedicated layout foveation forces
+                // (SM64VisionApp.swift), each eye is a SEPARATE texture at slice 0
+                // AND carries its OWN rasterization rate map indexed by the view's
+                // texture index; attaching the wrong eye's map is the guide's
+                // "right eye fisheye that warps with the head". (Layered layout —
+                // the foveation-off fallback — resolves to texture 0, slice per
+                // view, and a nil rate map, so this same code path is correct there
+                // too.)
+                cp_view_t vwTarget = cp_drawable_get_view(drawable, v);
+                cp_view_texture_map_t tmap = cp_view_get_view_texture_map(vwTarget);
+                size_t texIdx = cp_view_texture_map_get_texture_index(tmap);
+                size_t slice  = cp_view_texture_map_get_slice_index(tmap);
+                MTLViewport foveVp = cp_view_texture_map_get_viewport(tmap);
+
                 MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
-                pass.colorAttachments[0].texture = color;
-                pass.colorAttachments[0].slice = v; // this eye's array slice
+                pass.colorAttachments[0].texture = cp_drawable_get_color_texture(drawable, texIdx);
+                pass.colorAttachments[0].slice = slice; // this eye's array slice
                 pass.colorAttachments[0].loadAction = MTLLoadActionClear;
                 pass.colorAttachments[0].storeAction = MTLStoreActionStore;
                 pass.colorAttachments[0].clearColor = debugClear
                     ? MTLClearColorMake(0.06, 0.10, 0.32, 1.0)  // M0 proof colour
                     : MTLClearColorMake(0.0, 0.0, 0.0, 0.0);    // transparent = passthrough
-                if (depth) {
+                // Attach THIS view's rate map (guide step 3). Foveation ON =>
+                // count>0; OFF => 0, leaving the pass's map nil (a plain uniform
+                // pass). The rasterizer then maps the logical viewport to the
+                // eye-tracked variable-density physical texture.
+                size_t rmCount = cp_drawable_get_rasterization_rate_map_count(drawable);
+                if (rmCount > 0) {
+                    pass.rasterizationRateMap = cp_drawable_get_rasterization_rate_map(
+                        drawable, texIdx < rmCount ? texIdx : 0);
+                }
+                id<MTLTexture> depthTex = cp_drawable_get_depth_texture(drawable, texIdx);
+                if (depthTex) {
                     // The compositor reprojects on depth and REJECTS a frame
                     // whose depth it cannot read. Clearing + writing is mandatory.
-                    pass.depthAttachment.texture = depth;
-                    pass.depthAttachment.slice = v;
+                    pass.depthAttachment.texture = depthTex;
+                    pass.depthAttachment.slice = slice;
                     pass.depthAttachment.loadAction = MTLLoadActionClear;
                     pass.depthAttachment.storeAction = MTLStoreActionStore;
                     pass.depthAttachment.clearDepth = 1.0;
@@ -823,6 +881,10 @@ void sm64_3d_immersive_run(void *layer_renderer_ptr) {
 
                 id<MTLRenderCommandEncoder> enc =
                     [command_buffer renderCommandEncoderWithDescriptor:pass];
+                // Foveation contract (guide step 4): draw in the view's LOGICAL
+                // viewport; the attached rate map compresses logical->physical.
+                // Set before every draw in the pass (both the dim layer and quad).
+                [enc setViewport:foveVp];
                 float dimNow = sm64_dimLevel;
                 if (dimNow > 0.003f && sm64_dimPipeline) {
                     [enc setRenderPipelineState:sm64_dimPipeline];
