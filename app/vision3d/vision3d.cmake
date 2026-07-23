@@ -51,6 +51,15 @@ endif()
 # visionOS build scripts already use.
 enable_language(Swift)
 
+# Build number -> CFBundleVersion (via $(CURRENT_PROJECT_VERSION) in the plist).
+# The build scripts pass -DIOS_BUILD_NUMBER (monotonic: git commit count, or
+# SM64_BUILD_NUMBER to iterate test builds). Kept SEPARATE from overlay 0005's
+# IOS_MARKETING_VERSION (-> CFBundleShortVersionString) so the PUBLIC marketing
+# version stays curated + contiguous while the build number churns per build —
+# the App-Store-standard split (TestFlight ships many builds of one marketing
+# version). Default 1 for a bare configure / the sim script, which pass nothing.
+set(IOS_BUILD_NUMBER "1" CACHE STRING "visionOS app CFBundleVersion (build number)")
+
 function(_sm64_vision3d_wire)
     # By now CMakeLists.txt has run to the end, so SM64_VISIONOS exists and can
     # be asserted rather than assumed. If this ever fires, the two gates have
@@ -85,6 +94,9 @@ function(_sm64_vision3d_wire)
         ${GAME_ROOT}/src/pc/vision3d/SM64VisionApp.swift
     )
     set_target_properties(sm64coopdx PROPERTIES
+        # Build number (CFBundleVersion). Separate build setting from 0005's
+        # MARKETING_VERSION so the two version fields move independently.
+        XCODE_ATTRIBUTE_CURRENT_PROJECT_VERSION "${IOS_BUILD_NUMBER}"
         XCODE_ATTRIBUTE_SWIFT_VERSION "5.0"
         XCODE_ATTRIBUTE_SWIFT_OBJC_BRIDGING_HEADER
             "${GAME_ROOT}/src/pc/vision3d/sm64-bridging-header.h"

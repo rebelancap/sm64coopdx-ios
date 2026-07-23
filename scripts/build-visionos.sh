@@ -21,9 +21,19 @@ VENDOR="$ROOT/vendor/sm64coopdx"
 BUILD="$ROOT/build-visionos"
 DEPS="$ROOT/work/xros-deps/device"
 TEAM="${SM64_IOS_TEAM:-57G8J46Z2T}"
-# CFBundleShortVersionString. Must equal the git tag and GitHub release string, or
-# SideStore never offers the update (it string-compares this against the source JSON).
-MARKETING_VERSION="${SM64_MARKETING_VERSION:-1.1.1}"
+# MARKETING version (CFBundleShortVersionString) — the PUBLIC, curated semver.
+# Must equal the git tag + GitHub release string AT RELEASE TIME, or SideStore
+# never offers the update (it string-compares this against the source JSON).
+# PINNED to the next public target while iterating — bump BUILD_NUMBER per test
+# build, NOT this — so public numbers stay contiguous (App-Store style). Set
+# SM64_MARKETING_VERSION explicitly when cutting a release (1.2.0 feature, 1.1.2 fix).
+MARKETING_VERSION="${SM64_MARKETING_VERSION:-1.2.0}"
+# BUILD number (CFBundleVersion) — churns per build, DISTINCT from the marketing
+# version, so many test builds can iterate under one pinned marketing version.
+# Monotonic default = git commit count; override with SM64_BUILD_NUMBER for
+# uncommitted OTA test iterations. Feeds $(CURRENT_PROJECT_VERSION) in the plist
+# via IOS_BUILD_NUMBER -> XCODE_ATTRIBUTE_CURRENT_PROJECT_VERSION (vision3d.cmake).
+BUILD_NUMBER="${SM64_BUILD_NUMBER:-$(git -C "$ROOT" rev-list --count HEAD 2>/dev/null || echo 1)}"
 
 [[ -d "$VENDOR/.git" ]] || "$ROOT/scripts/bootstrap.sh"
 [[ -d "$VENDOR/lib/SDL2-source/.git" ]] || "$ROOT/scripts/fetch-sdl2.sh"
@@ -92,6 +102,7 @@ cmake --no-warn-unused-cli -S "$VENDOR" -B "$BUILD" -GXcode \
     -DSDL_OPENGLES=OFF -DSDL_OPENGL=OFF \
     "-DSM64_DEVELOPMENT_TEAM=$TEAM" \
     "-DIOS_MARKETING_VERSION=$MARKETING_VERSION" \
+    "-DIOS_BUILD_NUMBER=$BUILD_NUMBER" \
     "-DSM64_XROS_DEPS_PREFIX=$DEPS" \
     "-DSM64_VISIONOS_PLIST=$ROOT/app/ios/Info-visionos.plist" \
     "-DSM64_VISIONOS_ASSETS=$ROOT/app/ios/Assets-visionos.xcassets" \
@@ -151,6 +162,21 @@ NCRASH=$(nm "$BIN" 2>/dev/null | grep -c "_shell_crash_handler" || true)
     exit 1
 }
 
+# Assert BOTH version fields landed in the PROCESSED plist (the one inside the
+# built .app, not the source template). $(MARKETING_VERSION)/$(CURRENT_PROJECT_VERSION)
+# substitution fails SILENTLY — a literal "$(CURRENT_PROJECT_VERSION)" would ship
+# and SideStore's version compare would break — so verify the product, not the flag
+# (M-11 discipline). Marketing string-compares; build number must equal what we fed.
+PLIST="$APP/Info.plist"
+PMKT=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$PLIST" 2>/dev/null || echo "?")
+PBUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$PLIST" 2>/dev/null || echo "?")
+[[ "$PMKT" == "$MARKETING_VERSION" ]] || {
+    echo "FATAL: CFBundleShortVersionString is '$PMKT', expected '$MARKETING_VERSION'" >&2; exit 1; }
+[[ "$PBUILD" == "$BUILD_NUMBER" ]] || {
+    echo "FATAL: CFBundleVersion is '$PBUILD', expected '$BUILD_NUMBER' — did \$(CURRENT_PROJECT_VERSION) fail to substitute?" >&2
+    exit 1; }
+
 codesign -dv "$APP" 2>&1 | sed -n '1,4p'
 echo "platform=11 (XROS) arch=$ARCH  metal=yes  opengl=no  symbols=$NSYM  crash-sym=ok"
+echo "version: marketing=$PMKT  build=$PBUILD"
 echo "built (visionOS device): $APP"
