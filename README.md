@@ -17,9 +17,12 @@ Forked from [sm64coopdx-ios](https://github.com/LeoManrique/sm64coopdx-ios/).
 
 **Add the SideStore source** — the easiest path, and the app auto-updates when new versions ship:
 
-| Device | Source URL |
-| --- | --- |
-| Apple Vision Pro | `https://raw.githubusercontent.com/rebelancap/sm64coopdx-ios/main/sidestore/apps-visionos.json` |
+| Device | Source | Source URL |
+| --- | --- | --- |
+| Apple Vision Pro | sm64coopdx only | `https://raw.githubusercontent.com/rebelancap/sm64coopdx-ios/main/sidestore/apps-visionos.json` |
+| Apple Vision Pro | All ports | `https://raw.githubusercontent.com/rebelancap/all-ports/main/apps-visionos.json` |
+
+sm64coopdx is in both sources — add either one (All ports carries every rebelancap port).
 
 On **Apple Vision Pro**, first install SideStore onto the headset with
 [iloader](https://github.com/rebelancap/iloader/releases#release-visionos) (this custom version supports visionOS). Then, in SideStore:
