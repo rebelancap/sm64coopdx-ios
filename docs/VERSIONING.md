@@ -20,7 +20,7 @@ Set the marketing version with `SM64_MARKETING_VERSION` when building:
 SM64_MARKETING_VERSION=1.2.0 ./scripts/build-visionos.sh
 ```
 
-`build-visionos.sh` pins a default (currently `1.2.0`) and asserts BOTH
+`build-visionos.sh` pins a default (currently `1.2.1`) and asserts BOTH
 fields actually substituted into the built plist.
 
 ## Rule 1 — small updates bump the patch component

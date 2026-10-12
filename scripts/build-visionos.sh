@@ -33,7 +33,7 @@ TEAM="${SM64_IOS_TEAM:-57G8J46Z2T}"
 #   - OTA-only local dev builds (iterating with no GitHub release) get a FOURTH
 #     component: 1.1.2.1, 1.1.2.2, ... They stay OTA-only until one is worth
 #     releasing, at which point it becomes the next public 3-component version.
-MARKETING_VERSION="${SM64_MARKETING_VERSION:-1.2.0}"
+MARKETING_VERSION="${SM64_MARKETING_VERSION:-1.2.1}"
 # BUILD number (CFBundleVersion) — churns per build, DISTINCT from the marketing
 # version, so many test builds can iterate under one pinned marketing version.
 # Monotonic default = git commit count; override with SM64_BUILD_NUMBER for
