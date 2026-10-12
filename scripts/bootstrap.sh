@@ -20,7 +20,7 @@ REPO="https://github.com/LeoManrique/sm64coopdx-ios.git"
 # Override with SM64_VENDOR_MIRROR, or set it empty to clone from REPO only.
 MIRROR="${SM64_VENDOR_MIRROR:-https://github.com/rebelancap/sm64coopdx-ios-base.git}"
 # Pin: 2026-06-04 "Fix angle bracket in iOS Info.plist version string".
-PIN="07cc21319f98"
+PIN="f074c9eb8882"
 
 if [[ ! -d "$VENDOR/.git" ]]; then
     mkdir -p "$(dirname "$VENDOR")"

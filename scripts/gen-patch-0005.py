@@ -197,6 +197,23 @@ set(ALL_SOURCES
     ${SRC_CPP_FILES}
     ${SRC_OBJCPP_FILES}""", "metal-sources")
 
+# --- 4a. keep upstream's iOS UIScene SDL patch off visionOS ------------------
+# Upstream v151.1.0 added sdl2-ios-uiscene.patch (UIScene life cycle for the
+# iOS 27 SDK). It edits SDL_uikitappdelegate/messagebox/window.m, the same
+# files as our visionOS compat patch, which already glues SDL's window to the
+# SwiftUI-owned scene. Applied first, it made the visionOS patch's --check fail
+# and the build "skipped" it as already-applied. visionOS never takes it.
+t = replace_once(t, """set(SDL2_IOS_PATCHES
+    sdl2-ios-gamepad-fix.patch
+    sdl2-ios-uiscene.patch
+)""", """set(SDL2_IOS_PATCHES
+    sdl2-ios-gamepad-fix.patch
+    sdl2-ios-uiscene.patch
+)
+if(SM64_VISIONOS)
+    list(REMOVE_ITEM SDL2_IOS_PATCHES sdl2-ios-uiscene.patch)
+endif()""", "sdl2-uiscene-not-visionos")
+
 # --- 4. SDL2 visionOS compat patch -----------------------------------------
 t = replace_once(t, """add_subdirectory(${GAME_ROOT}/lib/SDL2-source SDL2 EXCLUDE_FROM_ALL)""",
 """# SDL 2.32.10 has zero visionOS awareness: its UIKit backend leans on
@@ -227,7 +244,18 @@ if(SM64_VISIONOS)
         endif()
         message(STATUS "Applied SDL2 visionOS compat patch")
     else()
-        message(STATUS "SDL2 visionOS compat patch already applied or not needed")
+        # Neither appliable nor already in the tree = something else edited
+        # the same SDL files first. Never build visionOS without it.
+        execute_process(
+            COMMAND git apply --reverse --check ${SM64_SDL2_VISIONOS_PATCH}
+            WORKING_DIRECTORY ${GAME_ROOT}/lib/SDL2-source
+            RESULT_VARIABLE VISIONOS_PATCH_REVERSE
+            ERROR_QUIET
+        )
+        if(NOT VISIONOS_PATCH_REVERSE EQUAL 0)
+            message(FATAL_ERROR "SDL2 visionOS compat patch neither applies nor is already applied")
+        endif()
+        message(STATUS "SDL2 visionOS compat patch already applied")
     endif()
 endif()
 

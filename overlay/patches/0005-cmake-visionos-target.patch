@@ -178,10 +178,21 @@ arm64-apple-xros2.0-simulator before adopting it.
      ${ACTORS_C_FILES}
      ${LEVELS_TOP_C_FILES}
      ${LEVEL_C_FILES}
-@@ -189,6 +239,38 @@
-     message(STATUS "SDL2 iOS gamepad fix patch already applied or not needed")
- endif()
- 
+@@ -180,6 +230,9 @@
+     sdl2-ios-gamepad-fix.patch
+     sdl2-ios-uiscene.patch
+ )
++if(SM64_VISIONOS)
++    list(REMOVE_ITEM SDL2_IOS_PATCHES sdl2-ios-uiscene.patch)
++endif()
+ foreach(PATCH ${SDL2_IOS_PATCHES})
+     execute_process(
+         COMMAND git apply --check ${GAME_ROOT}/patches/${PATCH}
+@@ -197,6 +250,49 @@
+         message(STATUS "SDL2 patch ${PATCH} already applied or not needed")
+     endif()
+ endforeach()
++
 +# SDL 2.32.10 has zero visionOS awareness: its UIKit backend leans on
 +# UIScreen/status-bar APIs the xrOS SDK marks unavailable. This patch (ported
 +# from the Shipwright visionOS bring-up) supplies UIScreen-free display modes, a
@@ -210,18 +221,27 @@ arm64-apple-xros2.0-simulator before adopting it.
 +        endif()
 +        message(STATUS "Applied SDL2 visionOS compat patch")
 +    else()
-+        message(STATUS "SDL2 visionOS compat patch already applied or not needed")
++        # Neither appliable nor already in the tree = something else edited
++        # the same SDL files first. Never build visionOS without it.
++        execute_process(
++            COMMAND git apply --reverse --check ${SM64_SDL2_VISIONOS_PATCH}
++            WORKING_DIRECTORY ${GAME_ROOT}/lib/SDL2-source
++            RESULT_VARIABLE VISIONOS_PATCH_REVERSE
++            ERROR_QUIET
++        )
++        if(NOT VISIONOS_PATCH_REVERSE EQUAL 0)
++            message(FATAL_ERROR "SDL2 visionOS compat patch neither applies nor is already applied")
++        endif()
++        message(STATUS "SDL2 visionOS compat patch already applied")
 +    endif()
 +endif()
-+
+ 
  add_subdirectory(${GAME_ROOT}/lib/SDL2-source SDL2 EXCLUDE_FROM_ALL)
  include_directories(${GAME_ROOT}/lib/SDL2-source/include)
- 
-@@ -213,18 +295,42 @@
-     ${GAME_ROOT}/src/pc/utils/miniaudio.c
+@@ -223,17 +319,41 @@
      PROPERTIES LANGUAGE OBJC
  )
-+
+ 
 +# Dependency slices. The vendored lib/*/ios/*.a are Mach-O platform 2 (iOS) and
 +# CANNOT link into an xrOS binary, so visionOS builds take real XROS(11) /
 +# XROS_SIMULATOR(12) slices from scripts/build-deps-xros.sh instead. Fail loudly
@@ -245,7 +265,7 @@ arm64-apple-xros2.0-simulator before adopting it.
 +    set(SM64_COOPNET_LIB ${GAME_ROOT}/lib/coopnet/ios/libcoopnet.a)
 +    set(SM64_JUICE_LIB   ${GAME_ROOT}/lib/coopnet/ios/libjuice.a)
 +endif()
- 
++
  target_link_libraries(sm64coopdx
      SDL2main
      SDL2-static
@@ -264,7 +284,7 @@ arm64-apple-xros2.0-simulator before adopting it.
  )
  
  # Marketing version -> CFBundleShortVersionString (via $(MARKETING_VERSION) in Info.plist).
-@@ -232,6 +338,29 @@
+@@ -241,6 +361,29 @@
  # version matches the GitHub release tag (required for AltStore/SideStore source updates).
  set(IOS_MARKETING_VERSION "1.0" CACHE STRING "iOS app CFBundleShortVersionString")
  
@@ -294,7 +314,7 @@ arm64-apple-xros2.0-simulator before adopting it.
  # iOS app bundle properties
  set_target_properties(sm64coopdx PROPERTIES
      MACOSX_BUNDLE TRUE
-@@ -239,20 +368,45 @@
+@@ -248,20 +391,45 @@
      MACOSX_BUNDLE_BUNDLE_NAME "SM64CoopDX"
      MACOSX_BUNDLE_BUNDLE_VERSION "1.0"
      MACOSX_BUNDLE_SHORT_VERSION_STRING "${IOS_MARKETING_VERSION}"
@@ -304,9 +324,8 @@ arm64-apple-xros2.0-simulator before adopting it.
 +    XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "${SM64_DEVICE_FAMILY}"
      XCODE_ATTRIBUTE_CODE_SIGN_STYLE "Automatic"
      XCODE_ATTRIBUTE_IPHONEOS_DEPLOYMENT_TARGET "15.0"
--    XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "com.sm64coopdx.ios"
+     XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "com.sm64coopdx.ios"
 -    XCODE_ATTRIBUTE_DEVELOPMENT_TEAM ""
-+    XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "com.rebelancap.sm64coopdx"
 +    XCODE_ATTRIBUTE_DEVELOPMENT_TEAM "${SM64_DEVELOPMENT_TEAM}"
      XCODE_ATTRIBUTE_ASSETCATALOG_COMPILER_APPICON_NAME "AppIcon"
      XCODE_ATTRIBUTE_MARKETING_VERSION "${IOS_MARKETING_VERSION}"
